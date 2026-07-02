@@ -179,6 +179,10 @@ def rank_candidates(
     # ================================================================
     t4 = time.time()
 
+    # Round scores BEFORE sorting so that the tie-breaker correctly applies to identical CSV scores
+    for entry in scored_candidates:
+        entry["composite_score"] = round(entry["composite_score"], OUTPUT_PRECISION)
+
     # Sort by composite score descending, then by candidate_id ascending for tiebreak
     scored_candidates.sort(
         key=lambda x: (-x["composite_score"], x["candidate_id"])
