@@ -2,62 +2,9 @@
 
 This repository contains the complete implementation for the Redrob Data & AI Challenge.
 
-## Architecture Overview
+## Quick Start (Run Directly)
 
-Our system is divided into two phases to meet the strict 5-minute, CPU-only runtime constraint:
-
-1.  **Offline Pre-computation (Kaggle)**: Runs heavy tasks like Sentence-Transformers embeddings, feature extraction across 100k profiles, and training an XGBoost Learning-to-Rank model. Saves artifacts to a `data/` directory.
-2.  **Fast Local Ranking (Local/Sandbox)**: A lightning-fast Python script (`rank.py`) that loads the pre-computed artifacts, runs our leniant Coarse Filter, Honeypot Detector, Feature Engineer, and Semantic Scorer, applies Behavioral Multipliers, and runs inference via the XGBoost model to output the `submission.csv` in under 30 seconds.
-
-## Phase 1: Kaggle Pre-computation Guide (Heavy Works)
-
-You must run this phase on Kaggle using a GPU to pre-compute the embeddings and train the model.
-
-### 1. Create a Kaggle Notebook
-1. Go to Kaggle, click **Create -> New Notebook**.
-2. Upload the `candidates.jsonl` dataset to your Kaggle workspace.
-3. In the right sidebar, under **Settings**, ensure the **Accelerator** is set to **GPU T4 x2** or **P100** (for fast embeddings).
-4. Make sure **Internet** is toggled **On**.
-
-### 2. Upload Code to Kaggle
-Upload the following files to your Kaggle environment (you can zip the folder and upload it as a dataset or drag-and-drop):
-- `precompute.py`
-- `config.py`
-- `src/` directory containing all modules
-
-### 3. Run Pre-computation
-Create a cell in your Kaggle notebook and run:
-
-```bash
-# Install dependencies
-!pip install sentence-transformers xgboost python-docx numpy pandas scikit-learn tqdm
-
-# Run the pre-computation pipeline
-!python precompute.py --candidates /kaggle/input/dataset/candidates.jsonl --output-dir /kaggle/working/data
-```
-
-This will perform the following steps:
-- Embed all 100K candidates using `sentence-transformers/all-MiniLM-L6-v2`.
-- Embed the Job Description text and Anti-patterns.
-- Compute cosine similarity semantic scores.
-- Extract structured features for all candidates.
-- Generate preference pairs and train the XGBoost ranking model.
-
-### 4. Download Artifacts
-Once the script finishes, you will see a `data/` folder in `/kaggle/working/`. It contains:
-- `candidate_embeddings.npz`
-- `jd_embeddings.npz`
-- `semantic_scores.json`
-- `candidate_features.json`
-- `xgb_ranker.json`
-
-**Download the entire `data/` folder and place it in your local project root (`c:\Users\Atharva\Documents\redrob\data\`).**
-
----
-
-## Phase 2: Local Ranking (Final Output generation)
-
-Once you have the `data/` folder from Kaggle, you can generate your `submission.csv`.
+If the pre-computed `data/` artifacts (the XGBoost model and embeddings) are already present in the repository, you can skip the Kaggle step entirely and generate the final `submission.csv` instantly.
 
 ### Requirements
 Install the local (CPU-only) dependencies:
@@ -67,10 +14,48 @@ pip install -r requirements.txt
 
 ### Run the Ranker
 ```bash
-python rank.py --candidates ./candidates.jsonl --out ./submission.csv
+python rank.py --candidates ./India_runs_data_and_ai_challenge/candidates.jsonl --out ./submission.csv
+```
+This script will load the pre-computed models/scores, score the candidates using a multi-stage pipeline, and output the top 100 candidates to `submission.csv` in **under 2 minutes on a standard CPU**.
+
+---
+
+## Architecture Overview & Design Decisions
+
+Our system is engineered to strictly adhere to the challenge constraints (< 5-minute runtime, CPU-only, no internet) while maximizing accuracy and dodging the hidden "honeypots." 
+
+To achieve this, we split the architecture into two distinct phases:
+
+### Why an Offline/Online Split?
+Traditional LLMs (like GPT-4 or Llama) are far too slow to evaluate 100,000 candidates in under 5 minutes on a CPU, and they are prone to hallucinating reasoning. By offloading the heavy embedding generation and model training to a GPU on Kaggle (Offline), our local execution (Online) only has to perform fast matrix lookups and XGBoost tree inference, taking seconds instead of hours.
+
+### 1. Offline Pre-computation (Kaggle/GPU)
+* **Dense Semantic Matching:** We use `sentence-transformers/all-MiniLM-L6-v2`. Instead of rigid keyword matching (which misses context), we embed the Job Description and candidates into vectors. This allows us to accurately match a candidate who says "built large-scale recommender systems" even if they don't explicitly list the exact keywords in the JD.
+* **Learning-to-Rank (LTR):** We generate preference pairs based on extracted features and train an **XGBoost** model. XGBoost was chosen because it natively handles non-linear feature interactions (e.g., figuring out how to combine high skills with a high anti-pattern penalty) much better than simple linear weights, and inference takes literally milliseconds.
+
+### 2. Fast Local Ranking (Runtime/CPU)
+* **Streaming Loader:** Instead of loading 500MB of JSONL into memory at once and crashing, `candidate_loader.py` acts as a streaming generator, keeping RAM usage almost at zero.
+* **Honeypot Detector:** We built a dedicated anomaly detection script to catch the ~80 fake profiles. It mathematically identifies experience-tenure mismatches, skill inflation (expert skills with <12mo duration), and impossible timelines. This ensures we are not disqualified for having >10% honeypots.
+* **Deterministic Explainability:** Our `reasoning_generator.py` is template-based, extracting the exact mathematical features (Top skills, Trajectory, Behavioral boosts) and converting them into a human-readable sentence. It is 100% factual and hallucination-free.
+
+---
+
+## Phase 1: Kaggle Pre-computation Guide (Heavy Works)
+
+*(If you are training from scratch)* You must run this phase on Kaggle using a GPU to pre-compute the embeddings and train the model.
+
+1. Create a Kaggle Notebook and attach the `candidates.jsonl` dataset. Enable the **GPU T4 x2** accelerator.
+2. Upload this codebase to Kaggle (as a dataset or via the interface).
+3. Run the following cell:
+
+```bash
+!pip install sentence-transformers xgboost python-docx numpy pandas scikit-learn tqdm
+
+# Run the pre-computation pipeline
+!python precompute.py --candidates /kaggle/input/dataset/candidates.jsonl --output-dir /kaggle/working/data
 ```
 
-This script will load the pre-computed models/scores, score the candidates using a multi-stage pipeline, and output the top 100 candidates to `submission.csv`. The execution should comfortably take < 5 minutes.
+4. Once the script finishes (it takes ~6.5 minutes), download the generated `data/` folder and place it in your local project root.
 
 ---
 
