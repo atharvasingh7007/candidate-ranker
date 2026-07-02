@@ -102,9 +102,10 @@ def step2_embed_jd(output_dir: Path) -> None:
     logger.info(f"Saved JD embeddings to {output_file}")
 
 
-def step3_compute_semantic_scores(output_dir: Path) -> dict:
+def step3_compute_semantic_scores(candidates: list[dict], output_dir: Path) -> dict:
     """Compute semantic similarity scores for all candidates."""
-    from src.semantic_scorer import compute_semantic_scores
+    from src.semantic_scorer import compute_semantic_scores, build_candidate_text
+    from src.jd_parser import get_jd_profile
 
     # Load embeddings
     cand_data = np.load(str(output_dir / "candidate_embeddings.npz"))
@@ -125,6 +126,49 @@ def step3_compute_semantic_scores(output_dir: Path) -> dict:
         jd_embedding=jd_embedding,
         anti_pattern_embedding=anti_pattern_embedding,
     )
+
+    # --- ADVANCED CROSS-ENCODER RE-RANKING ---
+    logger.info("Starting Cross-Encoder Re-Ranking for Top 5,000 candidates...")
+    try:
+        from sentence_transformers import CrossEncoder
+        
+        # 1. Get Top 5000 from Bi-Encoder
+        top_cids = sorted(scores.keys(), key=lambda k: scores[k], reverse=True)[:5000]
+        top_cids_set = set(top_cids)
+        
+        # 2. Extract their original text
+        jd = get_jd_profile()
+        jd_text = jd.requirements_text + " " + jd.summary_text
+        
+        pairs = []
+        pair_cids = []
+        for c in candidates:
+            if c["candidate_id"] in top_cids_set:
+                c_text = build_candidate_text(c)
+                pairs.append((jd_text, c_text))
+                pair_cids.append(c["candidate_id"])
+                
+        # 3. Predict with Cross-Encoder
+        logger.info(f"Running Cross-Encoder on {len(pairs)} pairs...")
+        cross_encoder = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+        ce_scores = cross_encoder.predict(pairs)
+        
+        # 4. Normalize to [0, 1] using min-max scaling, then boost
+        if len(ce_scores) > 0:
+            min_s, max_s = float(np.min(ce_scores)), float(np.max(ce_scores))
+            range_s = max_s - min_s if max_s > min_s else 1.0
+            
+            # Map back to semantic_scores
+            for cid, raw_score in zip(pair_cids, ce_scores):
+                norm_score = (float(raw_score) - min_s) / range_s
+                # Blend Bi-Encoder and Cross-Encoder (Heavy weight to Cross)
+                scores[cid] = (0.2 * scores[cid]) + (0.8 * norm_score)
+                
+        logger.info("Cross-Encoder Re-Ranking complete.")
+    except ImportError:
+        logger.warning("sentence-transformers not installed. Skipping Cross-Encoder.")
+    except Exception as e:
+        logger.error(f"Cross-Encoder failed, falling back to Bi-Encoder: {e}")
 
     # Save
     output_file = output_dir / "semantic_scores.json"
@@ -227,15 +271,16 @@ def step5_generate_training_pairs(all_features: list[dict]) -> list[tuple]:
 
 
 def step6_train_xgboost(pairs: list[tuple], output_dir: Path) -> None:
-    """Train XGBoost ranking model on pairwise data."""
+    """Train XGBoost ranking model on pairwise data with Hyperparameter Tuning."""
     try:
         import xgboost as xgb
+        from sklearn.model_selection import RandomizedSearchCV
     except ImportError:
-        logger.warning("xgboost not installed. Skipping XGBoost training.")
-        logger.warning("Install with: pip install xgboost")
+        logger.warning("xgboost or sklearn not installed. Skipping XGBoost training.")
+        logger.warning("Install with: pip install xgboost scikit-learn")
         return
 
-    logger.info("Training XGBoost ranking model...")
+    logger.info("Training XGBoost ranking model with Hyperparameter Tuning...")
 
     feature_names = [
         "skills_match", "career_trajectory", "semantic_similarity",
@@ -267,24 +312,50 @@ def step6_train_xgboost(pairs: list[tuple], output_dir: Path) -> None:
     X = X[perm]
     y = y[perm]
 
-    # Train
+    # Hyperparameter Tuning using RandomizedSearchCV
+    logger.info("Running RandomizedSearchCV for optimal tree parameters...")
+    param_dist = {
+        'max_depth': [3, 4, 5, 6],
+        'learning_rate': [0.01, 0.05, 0.1, 0.2],
+        'subsample': [0.7, 0.8, 0.9, 1.0],
+        'colsample_bytree': [0.7, 0.8, 0.9, 1.0],
+        'n_estimators': [50, 100, 150]
+    }
+    
+    estimator = xgb.XGBRegressor(objective="binary:logistic", seed=42, n_jobs=-1, eval_metric="auc")
+    search = RandomizedSearchCV(
+        estimator=estimator,
+        param_distributions=param_dist,
+        n_iter=10,  # 10 combinations
+        scoring="roc_auc",
+        cv=3,
+        verbose=1,
+        random_state=42,
+        n_jobs=-1
+    )
+    search.fit(X, y)
+    
+    best_params = search.best_params_
+    logger.info(f"Best Parameters Found: {best_params}")
+    
+    # Train final model with best params using DMatrix (for saving in expected format)
     dtrain = xgb.DMatrix(X, label=y, feature_names=feature_names)
-
-    params = {
+    
+    final_params = {
         "objective": "binary:logistic",
         "eval_metric": "auc",
-        "max_depth": 5,
-        "eta": 0.1,
-        "subsample": 0.8,
-        "colsample_bytree": 0.8,
+        "max_depth": best_params["max_depth"],
+        "eta": best_params["learning_rate"],
+        "subsample": best_params["subsample"],
+        "colsample_bytree": best_params["colsample_bytree"],
         "seed": 42,
         "nthread": -1,
     }
 
     model = xgb.train(
-        params,
+        final_params,
         dtrain,
-        num_boost_round=200,
+        num_boost_round=best_params["n_estimators"],
         verbose_eval=50,
     )
 
@@ -346,7 +417,7 @@ def main():
         logger.info("Skipping embedding computation (--skip-embeddings)")
 
     # Step 3: Compute semantic scores
-    semantic_scores = step3_compute_semantic_scores(output_dir)
+    semantic_scores = step3_compute_semantic_scores(candidates, output_dir)
 
     # Step 4: Extract features
     all_features = step4_extract_features(candidates, semantic_scores, output_dir)
