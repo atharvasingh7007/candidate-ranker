@@ -1,19 +1,12 @@
-FROM python:3.11-slim
+FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install core dependencies only (no GPU, no sentence-transformers at runtime)
 COPY requirements.txt .
-RUN pip install --no-cache-dir numpy pandas scikit-learn tqdm xgboost
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source code
-COPY config.py .
-COPY rank.py .
-COPY src/ ./src/
+COPY . .
 
-# Copy pre-computed artifacts
-COPY data/ ./data/
+EXPOSE 8501
 
-# Default command
-ENTRYPOINT ["python", "rank.py"]
-CMD ["--candidates", "./candidates.jsonl", "--out", "./submission.csv"]
+CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
