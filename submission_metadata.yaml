@@ -1,0 +1,78 @@
+# Redrob Hackathon — Submission Metadata
+# Copy this file to your repo root as `submission_metadata.yaml`
+
+# ============================================================================
+# Team identity
+# ============================================================================
+team_name: "Team Atharva"
+
+primary_contact:
+  name: "Atharva Singh"
+  email: "singhatharva7007@gmail.com"
+  phone: "Provided on registration"
+
+team_members:
+  - name: "Atharva Singh"
+    email: "singhatharva7007@gmail.com"
+    role: "ML Engineer"
+
+# ============================================================================
+# Code and reproducibility
+# ============================================================================
+github_repo: "https://github.com/atharvasingh7007/candidate-ranker.git"
+sandbox_link: "https://huggingface.co/spaces/atharvasingh7007/redrob-ranker"
+
+reproduce_command: "python rank.py --candidates ./candidates.jsonl --out ./submission.csv"
+
+# ============================================================================
+# Compute environment
+# ============================================================================
+compute:
+  platform: "Kaggle (pre-computation) + Local Windows (ranking)"
+  cpu_cores: 4
+  ram_gb: 16
+  python_version: "3.11"
+  os: "Windows 11"
+  uses_gpu_for_inference: false
+  has_network_during_ranking: false
+  pre_computation_required: true
+  pre_computation_time_minutes: 45
+
+# ============================================================================
+# AI tools declaration
+# ============================================================================
+ai_tools_used:
+  - "Gemini"
+
+ai_usage_summary: |
+  Used Gemini for architecture discussion and code scaffolding.
+  All scoring logic, feature engineering, and ranking decisions were
+  designed and validated by the team. No candidate data was fed to any LLM
+  during the ranking step.
+
+# ============================================================================
+# Approach summary
+# ============================================================================
+methodology_summary: |
+  Multi-stage ranking pipeline with semantic understanding and behavioral signals.
+  Stage 1: Coarse filter (services-only gate, experience band, minimum technical signal).
+  Stage 2: Honeypot detection via statistical anomaly checks (experience-tenure mismatch,
+  skill inflation, assessment paradox, timeline impossibilities).
+  Stage 3: Feature engineering across 6 dimensions (skills match with endorsement/duration
+  trust, career trajectory with product-company detection, semantic similarity via
+  sentence-transformers embeddings, experience Gaussian fit, location scoring, education).
+  Anti-pattern scoring penalizes title-chasers, CV/speech-only, consulting-only careers.
+  Stage 4: Behavioral multiplier from 23 Redrob signals (recency, response rate, GitHub,
+  notice period, availability). Stage 5: XGBoost pairwise ranking model trained on
+  programmatically generated preference pairs, with SHAP-derived reasoning.
+  Runtime: ~30 seconds on CPU for 100K candidates.
+
+# ============================================================================
+# Declarations
+# ============================================================================
+declarations:
+  read_submission_spec: true
+  code_is_original_work: true
+  no_collusion: true
+  honeypot_check_done: true
+  reproduction_tested: true

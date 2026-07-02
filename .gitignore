@@ -1,0 +1,13 @@
+# Datasets and generated artifacts
+data/
+data.zip
+rebrob_code.zip
+*.npz
+*.csv
+submission.csv
+India_runs_data_and_ai_challenge/
+
+# Python cache
+__pycache__/
+*.pyc
+.pytest_cache/
